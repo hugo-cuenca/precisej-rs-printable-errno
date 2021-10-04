@@ -9,6 +9,9 @@ repository = "https://github.com/hugo-cuenca/precisej-rs-printable-errno/"
 license = "MIT"
 categories = ["rust-patterns"]
 keywords = ["error", "nix", "errno", "libc", "error-handling"]
+exclude = [
+    ".idea/*",
+]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
