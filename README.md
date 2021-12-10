@@ -1,6 +1,5 @@
 # precisej-printable-errno
 
-## precisej-printable-errno
 Printable system call errors for `nix`. **CURRENTLY IN DEVELOPMENT**
 
 ## What?
@@ -40,6 +39,20 @@ into a library crate.
 I didn't find out how to do anything similar with other libraries
 such as `anyhow`. If someone finds a better, equally lightweight
 alternative please contact me.
+
+### Why not Termination?
+As of 2021-12-10, [std::process::Termination] is unstable and requires
+the `termination_trait_lib` feature, which can only be activated in
+nightly versions of Rust. Not all programs can make use of nightly (some,
+such as `initd`, deny the use of unstable features in its codebase),
+for which this crate exists.
+
+Not all of this library's functionality can be replicated with
+[std::process::Termination], so this library can be of use even for users
+of nightly Rust, albeit somewhat awkwardly. Future versions of
+`precisej-printable-errno` will optionally include an implementation of
+[std::process::Termination] for [ExitError] as a non-default feature for
+interested nightly users.
 
 ## How?
 ```rust
