@@ -87,17 +87,17 @@
 
 use std::{
     error::Error,
+    ffi::c_void,
     fmt::{
         Display,
         Formatter,
     },
     os::unix::io::RawFd,
-    process::exit,
+    process::{abort, exit},
 };
 use nix::{
     errno::Errno,
-    libc::_exit,
-    unistd::write,
+    libc::{_exit, write},
 };
 
 /// This is the base struct containing basic error information. Unless
@@ -142,9 +142,6 @@ impl PrintableErrno {
     }
 
     /// Print the error to stderr.
-    ///
-    /// # Safety
-    /// The caller must ensure that stderr (fd 2) is open.
     pub fn eprint(self) {
         eprintln!("{}", self);
     }
@@ -153,34 +150,50 @@ impl PrintableErrno {
     /// and not to call any non-signal-safe functions. Useful when one is the child
     /// in a multi-threaded program after a call to `fork()`.
     ///
+    /// # Note
+    /// No allocations should be made in this function in order to comply with `fork()`s
+    /// contract of signal-safety.
+    ///
     /// # Safety
-    /// The caller must ensure that stderr (fd 2) is open.
+    /// The caller must ensure that stderr (fd 2) remains open for the entirety of this
+    /// function call. A naive attempt at detecting a closed file descriptor is made on
+    /// first write. However, any subsequent writes may silently fail if stderr is closed
+    /// while this function is running.
     pub fn eprint_signalsafe(&self) {
-        const STDERR: RawFd = 2;
-        let program_name: &[u8] = &self.program_name.as_bytes();
-        let message: &[u8] = &self.message.as_bytes();
+        const STDERR: RawFd = nix::libc::STDERR_FILENO;
+        const CONST_COLON: &'static [u8] = b": ";
+        const CONST_NEWLINE: &'static [u8] = b"\n";
+
+        let program_name = &self.program_name.as_bytes();
+        let message = &self.message.as_bytes();
+        let res = unsafe { write(STDERR, program_name.as_ptr() as *const c_void, program_name.len()) };
+        if res < 0 {
+            // abort() should be signal-safe according to ISO C 99 (7.14.1.1p5).
+            // However, some versions of POSIX (before 1003.1-2004) required abort()
+            // to flush stdio streams, which would be hard (or impossible) to do
+            // safely while upholding the contract. In fact there are glibc
+            // implementations (before commit 91e7cf982d01) that perform the flush
+            // unsafely.
+            // Fortunately, Rust's stdlib makes no use of stdio buffering, so we
+            // can assume that most unsafe abort() implementations will be safe
+            // for us to call, as no buffer will be flushed.
+            abort()
+        }
+
+        unsafe {
+            write(STDERR, CONST_COLON.as_ptr() as *const c_void, CONST_COLON.len());
+            write(STDERR, message.as_ptr() as *const c_void, message.len());
+        }
+
         let errno = self.errno.as_ref();
-        let mut errno_desc: Option<&[u8]> = None;
-        let mut final_len = program_name.len() + message.len() + 3;
         if let Some(errno) = errno {
             let desc = errno.desc().as_bytes();
-            errno_desc = Some(desc);
-            final_len += desc.len() + 2;
+            unsafe {
+                write(STDERR, CONST_COLON.as_ptr() as *const c_void, CONST_COLON.len());
+                write(STDERR, desc.as_ptr() as *const c_void, desc.len());
+                write(STDERR, CONST_NEWLINE.as_ptr() as *const c_void, CONST_NEWLINE.len());
+            }
         }
-        let errno_desc = errno_desc;
-        let final_len = final_len;
-
-        let mut final_print_msg = Vec::with_capacity(final_len);
-        final_print_msg.extend_from_slice(program_name);
-        final_print_msg.extend_from_slice(b": ");
-        final_print_msg.extend_from_slice(message);
-        if let Some(errno_desc) = errno_desc {
-            final_print_msg.extend_from_slice(b": ");
-            final_print_msg.extend_from_slice(errno_desc);
-        }
-        final_print_msg.extend_from_slice(b"\n");
-
-        write(STDERR, &final_print_msg[..]).unwrap();
     }
 }
 impl Display for PrintableErrno {
@@ -238,7 +251,8 @@ impl ExitError {
     /// in a multi-threaded program after a call to `fork()`.
     ///
     /// # Safety
-    /// The caller must ensure that stderr (fd 2) is open.
+    /// The caller must ensure that stderr (fd 2) remains open for the entirety of this
+    /// function call.
     ///
     /// `_exit` is safe to call from the fork()-ed child as it's signal-safe. However, it
     /// doesn't call destructors (as opposed to exiting from main) nor does it call any exit
