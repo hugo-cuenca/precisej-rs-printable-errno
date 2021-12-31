@@ -284,9 +284,9 @@ impl <S: AsRef<str>> Display for ExitError<S> {
         self.errno.fmt(f)
     }
 }
-impl <S: 'static + AsRef<str> + Debug> Error for ExitError<S> {
+impl <S: AsRef<str> + Debug> Error for ExitError<S> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.errno)
+        self.errno.source()
     }
 }
 
