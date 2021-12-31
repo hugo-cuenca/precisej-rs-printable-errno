@@ -465,8 +465,6 @@ mod tests {
     use nix::fcntl::{open, OFlag};
     use nix::sys::stat::Mode;
     use crate::{ErrnoResult, PrintableResult, printable_error};
-    use nix::unistd::{fork, ForkResult};
-    use nix::sys::wait::{waitpid, WaitStatus};
 
     const TEST_NAME: &str = "precisej-printable-errno";
 
@@ -536,40 +534,5 @@ mod tests {
         );
 
         println!("END TEST 3");
-    }
-
-    #[test]
-    fn bail_signal_safe() {
-        println!();
-        println!("START TEST 4");
-
-        const MSG4_NAME: &str = "SIGNAL_SAFE: unable to open /pathto/nonexistent/file: No such file or directory";
-        const MSG4_EXIT_CODE: i32 = 1;
-
-        match unsafe { fork() }.unwrap() {
-            ForkResult::Parent { child } => {
-                loop {
-                    let waitpid = waitpid(child, None).unwrap();
-                    match waitpid {
-                        WaitStatus::Exited(_, code) => {
-                            println!("CODE: {}", code);
-                            assert_eq!(code, MSG4_EXIT_CODE);
-                            break
-                        }
-                        WaitStatus::Signaled(_, _, _) => {
-                            panic!("Child Signaled, expected Exited.")
-                        }
-                        _ => {
-                            // Continue
-                        }
-                    }
-                }
-            }
-            ForkResult::Child => unsafe {
-                printable_error(TEST_NAME, MSG4_NAME).bail(MSG4_EXIT_CODE).eprint_signal_safe_exit()
-            }
-        }
-
-        println!("END TEST 4");
     }
 }
