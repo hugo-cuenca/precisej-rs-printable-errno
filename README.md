@@ -66,7 +66,7 @@ pub fn main() {
     }
 }
 
-pub fn start() -> Result<(), ExitError> {
+pub fn start() -> Result<(), ExitError<&'static str>> {
     let init_file = open("/sbin/init", OFlag::O_RDONLY, Mode::empty())
         .printable(PROGRAM_NAME, "unable to open /sbin/init")
         .bail(1)?;

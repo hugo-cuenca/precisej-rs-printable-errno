@@ -68,7 +68,7 @@
 //!     }
 //! }
 //!
-//! pub fn start() -> Result<(), ExitError> {
+//! pub fn start() -> Result<(), ExitError<&'static str>> {
 //!     let init_file = open("/sbin/init", OFlag::O_RDONLY, Mode::empty())
 //!         .printable(PROGRAM_NAME, "unable to open /sbin/init")
 //!         .bail(1)?;
@@ -102,6 +102,7 @@ use std::{
     error::Error,
     ffi::c_void,
     fmt::{
+        Debug,
         Display,
         Formatter,
     },
@@ -126,7 +127,7 @@ use nix::{
 /// Printed error tries to follow `perror(3p)`'s format with the
 /// addition of the program name.
 #[derive(Debug)]
-pub struct PrintableErrno {
+pub struct PrintableErrno<S: AsRef<str>> {
     /// The name of the program responsible for generating this Error.
     /// This is normally the name of the final binary crate, usually
     /// saved as a const in the main.rs file.
@@ -138,16 +139,16 @@ pub struct PrintableErrno {
     /// `open("/path/to/file", OFlag::O_RDONLY, Mode::empty())`, the message could be as
     /// simple as `open`, or more detailed like `unable to open /path/to/file`.
     /// `PrintableErrno` will fill in the description of the [Errno] if it was available.
-    message: String,
+    message: S,
 
     /// The originating [Errno] value. This is always present unless this `PrintableErrno`
     /// originates from a call to [printable_error].
     errno: Option<Errno>,
 }
-impl PrintableErrno {
+impl <S: AsRef<str>> PrintableErrno<S> {
     /// Attach an exit code to the Error. Useful for bubbling up errors from a deep
     /// function using the `?` operator.
-    pub fn bail(self, exit_code: i32) -> ExitError {
+    pub fn bail(self, exit_code: i32) -> ExitError<S> {
         ExitError {
             exit_code,
             errno: self,
@@ -178,7 +179,7 @@ impl PrintableErrno {
         const CONST_NEWLINE: &'static [u8] = b"\n";
 
         let program_name = &self.program_name.as_bytes();
-        let message = &self.message.as_bytes();
+        let message = &self.message.as_ref().as_bytes();
         let res = unsafe { write(STDERR, program_name.as_ptr() as *const c_void, program_name.len()) };
         if res < 0 {
             // abort() should be signal-safe according to ISO C 99 (7.14.1.1p5).
@@ -209,15 +210,15 @@ impl PrintableErrno {
         }
     }
 }
-impl Display for PrintableErrno {
+impl <S: AsRef<str>> Display for PrintableErrno<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.errno {
-            Some(errno) => write!(f, "{}: {}: {}", self.program_name, self.message, errno.desc()),
-            None => write!(f, "{}: {}", self.program_name, self.message),
+            Some(errno) => write!(f, "{}: {}: {}", self.program_name, self.message.as_ref(), errno.desc()),
+            None => write!(f, "{}: {}", self.program_name, self.message.as_ref()),
         }
     }
 }
-impl Error for PrintableErrno {
+impl <S: AsRef<str> + Debug> Error for PrintableErrno<S> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self.errno {
             Some(ref x) => Some(x),
@@ -245,11 +246,11 @@ impl Error for PrintableErrno {
 /// and `_exit(exit_code)` respectively, exiting the process with the supplied
 /// exit code.
 #[derive(Debug)]
-pub struct ExitError {
+pub struct ExitError<S: AsRef<str>> {
     exit_code: i32,
-    errno: PrintableErrno,
+    errno: PrintableErrno<S>,
 }
-impl ExitError {
+impl <S: AsRef<str>> ExitError<S> {
     /// Print the error to stderr and exit with the supplied code.
     ///
     /// # Safety
@@ -278,12 +279,12 @@ impl ExitError {
         }
     }
 }
-impl Display for ExitError {
+impl <S: AsRef<str>> Display for ExitError<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.errno.fmt(f)
     }
 }
-impl Error for ExitError {
+impl <S: 'static + AsRef<str> + Debug> Error for ExitError<S> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.errno)
     }
@@ -297,10 +298,10 @@ pub trait ErrnoResult<T> {
     /// Maps the nix [Errno] to a [PrintableErrno] with the program name and the
     /// supplied message. This allows [nix::Result]s to be easily used with this
     /// library's error handling and Rust's `?` operator.
-    fn printable<S: Into<String>>(self, program_name: &'static str, message: S) -> Result<T, PrintableErrno>;
+    fn printable<S: AsRef<str>>(self, program_name: &'static str, message: S) -> Result<T, PrintableErrno<S>>;
 }
 impl <T> ErrnoResult<T> for Result<T, Errno> {
-    fn printable<S: Into<String>>(self, program_name: &'static str, message: S) -> Result<T, PrintableErrno> {
+    fn printable<S: AsRef<str>>(self, program_name: &'static str, message: S) -> Result<T, PrintableErrno<S>> {
         self.map_err(|e| PrintableErrno {
             program_name,
             message: message.into(),
@@ -313,10 +314,10 @@ impl <T> ErrnoResult<T> for Result<T, Errno> {
 
 /// This trait defines a [Result] with our own [PrintableErrno], allowing further conversion
 /// to [ExitError], or printing and returning and Option.
-pub trait PrintableResult<T> {
+pub trait PrintableResult<T, S: AsRef<str>> {
     /// Maps the [PrintableErrno] to an [ExitError] in order to facilitate
     /// bubbling up the error to the appropriate place to quit the program.
-    fn bail(self, exit_code: i32) -> Result<T, ExitError>;
+    fn bail(self, exit_code: i32) -> Result<T, ExitError<S>>;
 
     /// Consumes the result, prints the error (if present) to stderr, and returns
     /// an [Option] of the underlying value.
@@ -333,8 +334,8 @@ pub trait PrintableResult<T> {
     /// The caller must ensure that stderr (fd 2) is open.
     fn ok_or_eprint_signal_safe(self) -> Option<T>;
 }
-impl <T> PrintableResult<T> for Result<T, PrintableErrno> {
-    fn bail(self, exit_code: i32) -> Result<T, ExitError> {
+impl <T, S: AsRef<str>> PrintableResult<T, S> for Result<T, PrintableErrno<S>> {
+    fn bail(self, exit_code: i32) -> Result<T, ExitError<S>> {
         self.map_err(|e| e.bail(exit_code))
     }
     fn ok_or_eprint(self) -> Option<T> {
@@ -406,7 +407,7 @@ pub trait ExitErrorResult<T> {
     /// The caller must ensure that stderr (fd 2) is open.
     fn ok_or_eprint_signal_safe(self) -> Option<T>;
 }
-impl <T> ExitErrorResult<T> for Result<T, ExitError> {
+impl <T, S: AsRef<str>> ExitErrorResult<T> for Result<T, ExitError<S>> {
     fn unwrap_or_eprint_exit(self) -> T {
         match self {
             Ok(t) => t,
@@ -448,7 +449,7 @@ impl <T> ExitErrorResult<T> for Result<T, ExitError> {
 /// Creates an error out of the program name and the supplied message. Useful
 /// when an Errno isn't present, but the program wants to signal a problem to
 /// the user and possibly exit if it's fatal.
-pub fn printable_error<S: Into<String>>(program_name: &'static str, message: S) -> PrintableErrno {
+pub fn printable_error<S: AsRef<str>>(program_name: &'static str, message: S) -> PrintableErrno<S> {
     PrintableErrno {
         program_name,
         message: message.into(),
