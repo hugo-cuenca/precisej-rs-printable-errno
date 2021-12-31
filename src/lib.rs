@@ -107,7 +107,7 @@ use std::{
         Formatter,
     },
     os::unix::io::RawFd,
-    process::{abort, exit},
+    process::exit,
 };
 use nix::{
     errno::Errno,
@@ -182,16 +182,8 @@ impl <S: AsRef<str>> PrintableErrno<S> {
         let message = &self.message.as_ref().as_bytes();
         let res = unsafe { write(STDERR, program_name.as_ptr() as *const c_void, program_name.len()) };
         if res < 0 {
-            // abort() should be signal-safe according to ISO C 99 (7.14.1.1p5).
-            // However, some versions of POSIX (before 1003.1-2004) required abort()
-            // to flush stdio streams, which would be hard (or impossible) to do
-            // safely while upholding the contract. In fact there are glibc
-            // implementations (before commit 91e7cf982d01) that perform the flush
-            // unsafely.
-            // Fortunately, Rust's stdlib makes no use of stdio buffering, so we
-            // can assume that most unsafe abort() implementations will be safe
-            // for us to call, as no buffer will be flushed.
-            abort()
+            // error writing to stderr: there is nothing left to do
+            return;
         }
 
         unsafe {
