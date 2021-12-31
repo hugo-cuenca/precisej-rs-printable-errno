@@ -174,6 +174,25 @@ impl <S: AsRef<str>> PrintableErrno<S> {
     /// first write. However, any subsequent writes may silently fail if stderr is closed
     /// while this function is running.
     pub fn eprint_signalsafe(&self) {
+        // XXX: Is writev signal-safe?
+        // signal-safety(7) lists write(2) as signal-safe, but not writev(2).
+        // However writev(2) states:
+        //     The writev() system call works just like write(2) except that
+        //     multiple buffers are written out.
+        // Since write(2) is signal-safe, and writev(2) claims to work like
+        // write(2), is its omission from signal-safety(7) an oversight? Or
+        // is there some other undocumented, unexplained difference between
+        // them? Furthermore, since writev(2)'s signal-safety is unclear, can
+        // we rely on POSIX-compliant OSes and libc/library authors to not
+        // introduce any point of unsafety in this regard? i.e. even if the
+        // CSRG issues a revision to the POSIX standard tomorrow that explicitly
+        // requires writev(2) to be signal-safe, can we be sure that all
+        // supported Linux versions comply, as well as all supported glibc/musl
+        // versions in use?
+        // Further reading:
+        // https://groups.google.com/g/comp.unix.programmer/c/IfHr5I8NwW0
+        // https://pubs.opengroup.org/onlinepubs/9699919799/functions/V2_chap02.html
+        // https://austingroupbugs.net/view.php?id=1455
         const STDERR: RawFd = nix::libc::STDERR_FILENO;
         const CONST_COLON: &'static [u8] = b": ";
         const CONST_NEWLINE: &'static [u8] = b"\n";
