@@ -106,12 +106,11 @@ use std::{
         Display,
         Formatter,
     },
-    os::unix::io::RawFd,
     process::exit,
 };
 use nix::{
     errno::Errno,
-    libc::{_exit, write},
+    libc::{STDERR_FILENO, _exit, write},
 };
 
 /// This is the base struct containing basic error information. Unless
@@ -193,30 +192,51 @@ impl <S: AsRef<str>> PrintableErrno<S> {
         // https://groups.google.com/g/comp.unix.programmer/c/IfHr5I8NwW0
         // https://pubs.opengroup.org/onlinepubs/9699919799/functions/V2_chap02.html
         // https://austingroupbugs.net/view.php?id=1455
-        const STDERR: RawFd = nix::libc::STDERR_FILENO;
         const CONST_COLON: &'static [u8] = b": ";
         const CONST_NEWLINE: &'static [u8] = b"\n";
 
         let program_name = &self.program_name.as_bytes();
         let message = &self.message.as_ref().as_bytes();
-        let res = unsafe { write(STDERR, program_name.as_ptr() as *const c_void, program_name.len()) };
-        if res < 0 {
+        let res = write_stderr(program_name);
+        if !res {
             // error writing to stderr: there is nothing left to do
             return;
         }
 
-        unsafe {
-            write(STDERR, CONST_COLON.as_ptr() as *const c_void, CONST_COLON.len());
-            write(STDERR, message.as_ptr() as *const c_void, message.len());
-        }
+        write_stderr(CONST_COLON);
+        write_stderr(message);
 
         let errno = self.errno.as_ref();
         if let Some(errno) = errno {
             let desc = errno.desc().as_bytes();
-            unsafe {
-                write(STDERR, CONST_COLON.as_ptr() as *const c_void, CONST_COLON.len());
-                write(STDERR, desc.as_ptr() as *const c_void, desc.len());
-                write(STDERR, CONST_NEWLINE.as_ptr() as *const c_void, CONST_NEWLINE.len());
+            write_stderr(CONST_COLON);
+            write_stderr(desc);
+        }
+        write_stderr(CONST_NEWLINE);
+
+        fn write_stderr(buf: &[u8]) -> bool {
+            let mut pos = buf.as_ptr() as usize;
+            let mut len = buf.len();
+            loop {
+                let res = unsafe { write(STDERR_FILENO, pos as *const c_void, len) };
+                match res {
+                    0 => break true,
+                    e if e < 0 => {
+                        let err = Errno::last();
+                        if !matches!(err, Errno::EINTR) {
+                            break false;
+                        }
+                        // EINTR means we can try again, so continue loop
+                    }
+                    // written will always be positive
+                    w if (w as usize) < len => {
+                        let written = w as usize;
+                        pos += written;
+                        len -= written;
+                        // try again with remaining
+                    }
+                    _ => break true,
+                }
             }
         }
     }
@@ -484,7 +504,7 @@ mod tests {
         println!();
         println!("START TEST 1");
 
-        const MSG1_NAME: &str = "unable to open /pathto/nonexistent/file";
+        const MSG1_NAME: &str = "test1: unable to open /pathto/nonexistent/file";
 
         let result1 = open("/pathto/nonexistent/file", OFlag::O_RDONLY, Mode::empty())
             .printable(TEST_NAME, MSG1_NAME);
@@ -506,7 +526,7 @@ mod tests {
         println!();
         println!("START TEST 2");
 
-        const MSG2_NAME: &str = "expected value 1, got 30";
+        const MSG2_NAME: &str = "test2: expected value 1, got 30";
 
         let result1 = printable_error(TEST_NAME, MSG2_NAME);
         let result2 = printable_error(TEST_NAME, MSG2_NAME);
@@ -525,7 +545,7 @@ mod tests {
         println!();
         println!("START TEST 3");
 
-        const MSG3_NAME: &str = "unable to open /pathto/nonexistent/file";
+        const MSG3_NAME: &str = "test3: unable to open /pathto/nonexistent/file";
         const MSG3_EXIT_CODE: i32 = 1;
 
         let result1 = open("/pathto/nonexistent/file", OFlag::O_RDONLY, Mode::empty())
@@ -545,5 +565,25 @@ mod tests {
         );
 
         println!("END TEST 3");
+    }
+
+    #[test]
+    fn eprint_signal_safe() {
+        println!();
+        println!("START TEST 4");
+
+        const MSG4_NAME_1: &str = "test4: unable to open /pathto/nonexistent/file";
+        const MSG4_NAME_2: &str = "test4: expected value 1, got 30";
+
+        let result1 = open("/pathto/nonexistent/file", OFlag::O_RDONLY, Mode::empty())
+            .printable(TEST_NAME, MSG4_NAME_1);
+        result1.ok_or_eprint_signal_safe();
+
+        let result2 = printable_error(TEST_NAME, MSG4_NAME_2);
+        let result3 = printable_error(TEST_NAME, MSG4_NAME_2);
+        result2.eprint_signalsafe();
+        result3.eprint_signalsafe();
+
+        println!("END TEST 4");
     }
 }
