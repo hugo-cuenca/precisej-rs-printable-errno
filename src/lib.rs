@@ -68,7 +68,7 @@
 //!     }
 //! }
 //!
-//! pub fn start() -> Result<(), ExitError<&'static str>> {
+//! pub fn start() -> Result<(), ExitError<String>> {
 //!     let init_file = open("/sbin/init", OFlag::O_RDONLY, Mode::empty())
 //!         .printable(PROGRAM_NAME, "unable to open /sbin/init")
 //!         .bail(1)?;
@@ -81,7 +81,7 @@
 //!     drop(buf);
 //!
 //!     open("/path/to/nonexistent/file", OFlag::O_RDONLY, Mode::empty())
-//!         .printable(PROGRAM_NAME, "unable to open /path/to/nonexistent/file")
+//!         .printable(PROGRAM_NAME, format!("unable to open {}", "/path/to/nonexistent/file"))
 //!         .bail(3)?;
 //!
 //!     // That last call should have caused the process to exit with
@@ -490,12 +490,33 @@ pub fn printable_error<S: AsRef<str>>(program_name: &'static str, message: S) ->
 
 // ***
 
+impl From<PrintableErrno<&'_ str>> for PrintableErrno<String> {
+    fn from(item: PrintableErrno<&'_ str>) -> Self {
+        PrintableErrno {
+            program_name: item.program_name,
+            message: item.message.to_string(),
+            errno: item.errno,
+        }
+    }
+}
+
+impl From<ExitError<&'_ str>> for ExitError<String> {
+    fn from(item: ExitError<&'_ str>) -> Self {
+        ExitError {
+            exit_code: item.exit_code,
+            errno: item.errno.into(),
+        }
+    }
+}
+
+// ***
+
 #[cfg(test)]
 mod tests {
     use nix::errno::Errno;
     use nix::fcntl::{open, OFlag};
     use nix::sys::stat::Mode;
-    use crate::{ErrnoResult, PrintableResult, printable_error};
+    use crate::{ErrnoResult, PrintableResult, printable_error, PrintableErrno, ExitError, ExitErrorResult};
 
     const TEST_NAME: &str = "precisej-printable-errno";
 
@@ -585,5 +606,34 @@ mod tests {
         result3.eprint_signalsafe();
 
         println!("END TEST 4");
+    }
+
+    #[test]
+    fn from_str_into_string() {
+        println!();
+        println!("START TEST 5");
+
+        const MSG5_NAME: &str = "test5: expected value 1, got 30";
+
+        let result1 = printable_error(TEST_NAME, MSG5_NAME);
+        let result2 = printable_error(TEST_NAME, MSG5_NAME).bail(2);
+        let result3: PrintableErrno<String> = result1.into();
+        let _: ExitError<String> = result2.into();
+
+        result3.eprint();
+
+        internal_test_5_fn_result_1().ok_or_eprint();
+        internal_test_5_fn_result_2().ok_or_eprint();
+
+        println!("END TEST 5");
+
+        fn internal_test_5_fn_result_1() -> Result<(), PrintableErrno<String>> {
+            Err::<(), PrintableErrno<&'static str>>(printable_error(TEST_NAME, MSG5_NAME))?;
+            Ok(())
+        }
+        fn internal_test_5_fn_result_2() -> Result<(), ExitError<String>> {
+            Err::<(), PrintableErrno<&'static str>>(printable_error(TEST_NAME, MSG5_NAME)).bail(2)?;
+            Ok(())
+        }
     }
 }
